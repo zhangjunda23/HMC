@@ -8,17 +8,17 @@ import numpy as np
 
 # 用HMC采样
 def HMC():
+    # U、dU、K、dK需要准确计算，不能随意舍掉前面的系数，梯度的减小等价于leap frog方法里步长的减小
     # 势能，常数被忽略
     def U(xx: np.ndarray):
         xx = xx.reshape((1, 2))
         res = (xx[0, 0]) ** 2 + (xx[0, 1]) ** 2
         return res
 
-    # 势能的导数，常数被忽略。这里是求的偏导向量，即[\frac{\partial U}{x_1},\frac{\partial U}{x_2}]。太跳跃了，因为\Sigma是对称矩阵
-    # 所以其逆矩阵也是对称矩阵，计算出来就有了dU
+    # 势能的导数
     def dU(xx: np.ndarray):
         xx = xx.reshape((1, 2))
-        res = xx
+        res = 2 * xx
         return res
 
     # 动能
@@ -26,8 +26,13 @@ def HMC():
         res = np.matmul(p, np.transpose(p))
         return res
 
-    delta = 0.3  # leap frog的步长
-    nSample = 1000  # 需要采样的样本数量
+    # 动能的导数
+    def dK(p: np.ndarray):
+        res = 2 * p
+        return res
+
+    delta = 0.2  # leap frog的步长
+    nSample = 10000  # 需要采样的样本数量
     L = 20  # leap frog的步数
 
     # 初始化
@@ -48,10 +53,10 @@ def HMC():
             p0 = np.random.randn(1, 2)
             # leap frog方法
             pStar = p0 - delta / 2 * dU(x[t - 1, :])  # 动量移动半步
-            xStar = x[t - 1, :] + delta * pStar  # 位置移动一步，这里pStar是U对P的偏导
+            xStar = x[t - 1, :] + delta * dK(pStar)  # 位置移动一步，这里pStar是U对P的偏导
             for jL in range(1, L - 1):
                 pStar = pStar - delta * dU(xStar)
-                xStar = xStar + delta * pStar
+                xStar = xStar + delta * dK(pStar)
             pStar = pStar - delta / 2 * dU(xStar)
 
             U0 = U(x[t - 1, :])
