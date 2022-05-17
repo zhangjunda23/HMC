@@ -4,21 +4,49 @@ import tqdm
 from matplotlib.animation import FuncAnimation
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.misc import derivative
+import time
 
 
 # 用HMC采样
 def HMC():
+    global interpolationCount
+
+    # 用scipy求偏导，参数为（目标函数，求偏导得维度，求偏导的点）
+    def partial_derivative(func, var=0, point=[]):
+        args = point[:]
+
+        def wraps(xx):
+            args[var] = xx
+            return func(*args)
+
+        return derivative(wraps, point[var], dx=1e-6)
+
+    # 目标分布pdf，不归一化
+    def TargetPDF(xin, yin):
+        return math.exp(-1 / 2 * ((xin - 3) ** 2 + (yin - 3) ** 2)) + math.exp(
+            -1 / 2 * ((xin + 3) ** 2 + (yin + 3) ** 2))
+
+    # 能量
+    def TargetPDFU(xin, yin):
+        return -math.log(TargetPDF(xin, yin))
+
     # U、dU、K、dK需要准确计算，不能随意舍掉前面的系数，梯度的减小等价于leap frog方法里步长的减小
     # 势能，常数被忽略
     def U(xx: np.ndarray):
+        global interpolationCount
         xx = xx.reshape((1, 2))
-        res = (xx[0, 0]) ** 2 + (xx[0, 1]) ** 2
+        res = TargetPDFU(xx[0, 0], xx[0, 1])
+        interpolationCount = interpolationCount + 1
         return res
 
     # 势能的导数
     def dU(xx: np.ndarray):
+        global interpolationCount
         xx = xx.reshape((1, 2))
-        res = 2 * xx
+        interpolationCount = interpolationCount + 1
+        res = np.array(
+            [partial_derivative(TargetPDFU, 0, xx.tolist()[0]), partial_derivative(TargetPDFU, 1, xx.tolist()[0])])
         return res
 
     # 动能
@@ -32,8 +60,8 @@ def HMC():
         return res
 
     delta = 0.2  # leap frog的步长
-    nSample = 10000  # 需要采样的样本数量
-    L = 20  # leap frog的步数
+    nSample = 2000  # 需要采样的样本数量
+    L = 5  # leap frog的步数
 
     # 初始化
     x = np.zeros((nSample, 2))
@@ -44,11 +72,14 @@ def HMC():
     vPoint = 0
     rPoint = 0
     vPoint = vPoint + 1
+
+    t = t + 1
+    t1 = time.perf_counter()
     with tqdm.tqdm(total=nSample) as pbar:
         pbar.set_description('采样进度')
         pbar.update(1)
-        while t < nSample - 1:
-            t = t + 1
+        while vPoint < nSample:
+
             # p0 = np.random.rand(1, 2)  # 随机采样一个动量，需要服从动量的分布，而不是均匀采样
             p0 = np.random.randn(1, 2)
             # leap frog方法
@@ -71,17 +102,19 @@ def HMC():
             if u < alpha:
                 x[t, :] = xStar
                 vPoint = vPoint + 1
+                t = t + 1
             else:
-                x[t, :] = x[t - 1, :]
+                # x[t, :] = x[t - 1, :]
                 rPoint = rPoint + 1
+                pass
             pbar.update(1)
-
+    t2 = time.perf_counter()
     # 画图
     fig, ax = plt.subplots()
     line, = plt.plot(x[:, 0], x[:, 1], 'o', linewidth=0.5, markersize=1)
-    fig.suptitle("%d个有效点，%d个重复点" % (vPoint, rPoint))
-    # ax.set_xlim(-10, 10)
-    # ax.set_ylim(-10, 10)
+    fig.suptitle("HMC算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
+    ax.set_xlim(-10, 10)
+    ax.set_ylim(-10, 10)
 
     # def update(i):
     #     global repeatCount
@@ -97,9 +130,9 @@ def HMC():
     #     return line, fig
     #
     # ani = FuncAnimation(fig, update, interval=100)
-
-    plt.show()
-    plt.pause(0)
+    #
+    # plt.show()
+    # plt.pause(0)
 
 
 # 用metropolis采样方法
@@ -108,17 +141,19 @@ def MH():
     def TargetDis(xx):
         sigma = np.array([[1, 0], [0, 1]])  # 两个都是标准正态分布，只不过各自向两个方向移动了一定的距离
         c = 1 / (math.sqrt(2 * math.pi * np.linalg.det(sigma)))  # 正态分布exp前面的系数
-        m1 = np.matmul(xx - np.array([5, 5]), np.linalg.inv(sigma))
-        m1 = np.matmul(m1, np.transpose(xx - np.array([5, 5])))
-        m2 = np.matmul(xx + np.array([5, 5]), np.linalg.inv(sigma))
-        m2 = np.matmul(m2, np.transpose(xx + np.array([5, 5])))
+        m1 = np.matmul(xx - np.array([3, 3]), np.linalg.inv(sigma))
+        m1 = np.matmul(m1, np.transpose(xx - np.array([3, 3])))
+        m2 = np.matmul(xx + np.array([3, 3]), np.linalg.inv(sigma))
+        m2 = np.matmul(m2, np.transpose(xx + np.array([3, 3])))
         res = 1 / 2 * (c * math.exp(-1 / 2 * m1) + c * math.exp(-1 / 2 * m2))  # 两个概率密度相加
         return res
 
     # 初始化
-    nSample = 1000  # 需要采样的样本数量
+    global interpolationCount
+    interpolationCount = 0
+    nSample = 2000  # 需要采样的样本数量
     x = np.zeros((nSample, 2))
-    x0 = np.array([0, 6])
+    x0 = np.array([12, 5])
     x[0, :] = x0
     alpha = 0
     currentP = TargetDis(x0)
@@ -126,28 +161,34 @@ def MH():
     rPoint = 0  # 重复点数
     vPoint = 0  # 有效点数
     vPoint = vPoint + 1
+    t = t + 1
+    t1 = time.perf_counter()
     with tqdm.tqdm(total=nSample) as pbar:
-        pbar.set_description('采样进度:')
+        pbar.set_description('采样进度')
         pbar.update(1)
-        while t < nSample - 1:
-            t = t + 1
-            point = np.random.rand(1, 2) * 20 - 10  # 在[-5,5][-5,5]范围内均匀采样一个点
+        while vPoint < nSample:
+
+            point = np.random.randn(1, 2) + x[t - 1, :]  # 以上一个点为中心的标准正态分布采样下一个点
             p = TargetDis(point)
+            interpolationCount = interpolationCount + 1
             alpha = min(1., p / currentP)
             u = random.random()
             if u < alpha:
                 x[t, :] = point
                 currentP = p
                 vPoint = vPoint + 1
+                t = t + 1
             else:
-                x[t, :] = x[t - 1, :]
+                # x[t, :] = x[t - 1, :]
                 rPoint = rPoint + 1
+                pass
             pbar.update(1)
 
+    t2 = time.perf_counter()
     fig, ax = plt.subplots()
     # line, = plt.plot(x[0, 0], x[0, 1], 'o', linewidth=1, markersize=1)
     line, = plt.plot(x[:, 0], x[:, 1], 'o', linewidth=1, markersize=1)
-    fig.suptitle("%d个有效点，%d个重复点" % (vPoint, rPoint))
+    fig.suptitle("MH算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
     ax.set_xlim(-10, 10)
     ax.set_ylim(-10, 10)
 
@@ -166,16 +207,15 @@ def MH():
     #
     # ani = FuncAnimation(fig, update, interval=0.01)
 
-    plt.show()
-    plt.pause(0)
-
 
 if __name__ == '__main__':
     plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
     plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
-    np.random.seed(1234)
+    np.random.seed(123)
     repeatCount = 0
     validCount = 0
-
+    interpolationCount = 0  # 重构次数的计数
     HMC()
-    # MH()
+    MH()
+
+    plt.show()
