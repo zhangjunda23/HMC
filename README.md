@@ -1,0 +1,4 @@
+# Hamiltonian（Hybrid） Monte Carlo和Metropolis-Hastings采样方法的对比
+利用两种方法对两个三维正态分布的叠加分布进行采样，对比性能。MH方法中的proposal distribution（分别用了正态分布和均匀分布）是对称的，所以其实是Metropolis方法。
+
+程序用matplotlib.animation把采样点逐个绘制出来，从而能够观察采样点之间是否存在相关性（MH或M方法的缺点，HMC方法的优点）。
