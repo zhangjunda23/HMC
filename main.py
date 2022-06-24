@@ -1,5 +1,7 @@
 import math
 import random
+
+import numpy
 import tqdm
 from matplotlib.animation import FuncAnimation
 import matplotlib.pyplot as plt
@@ -196,33 +198,133 @@ def MH():
             pbar.update(1)
 
     t2 = time.perf_counter()
-    fig = plt.figure()
-    ax = fig.add_subplot(projection='3d')
+    figMH = plt.figure()
+    axMH = figMH.add_subplot(projection='3d')
     # fig, ax = plt.subplots(projection='3d')
     # line, = plt.plot(x[0, 0], x[0, 1], 'o', linewidth=1, markersize=1)
-    line, = plt.plot(x[:, 0], x[:, 1], x[:, 2], 'o', linewidth=1, markersize=0.1)
-    fig.suptitle("MH算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.set_xlim(-10, 10)
-    ax.set_ylim(-10, 10)
-    ax.set_zlim(-10, 10)
+    lineMH, = plt.plot(x[:, 0], x[:, 1], x[:, 2], 'o', linewidth=1, markersize=0.1)
+    figMH.suptitle("MH算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
+    axMH.set_xlabel('X')
+    axMH.set_ylabel('Y')
+    axMH.set_zlabel('Z')
+    axMH.set_xlim(-10, 10)
+    axMH.set_ylim(-10, 10)
+    axMH.set_zlim(-10, 10)
 
     # def update(i):
     #     global repeatCount
     #     global validCount
-    #     line.set_xdata(x[0:i, 0])
-    #     line.set_ydata(x[0:i, 1])
+    #     lineMH.set_xdata(x[0:i, 0])
+    #     lineMH.set_ydata(x[0:i, 1])
     #     if i > 0:
     #         if (x[i, :] == x[i - 1, :]).all():
     #             repeatCount = repeatCount + 1
     #         else:
     #             validCount = validCount + 1
-    #     fig.suptitle("%d个有效点，%d个重复点" % (validCount, repeatCount))
-    #     return line, fig
+    #     figMH.suptitle("%d个有效点，%d个重复点" % (validCount, repeatCount))
+    #     return lineMH, figMH
     #
-    # ani = FuncAnimation(fig, update, interval=0.01)
+    # ani = FuncAnimation(figMH, update, interval=0.01)
+
+    return x
+
+
+# 生成负粒子
+def NegParticles():
+    x = MH()  # 获得用MH方法生成的粒子
+    global interpolationCount, sampleCount, deviation
+
+    # 原分布
+    def TargetDis_Ori(xx):
+        sigma = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])  # 两个都是标准正态分布，只不过各自向两个方向移动了一定的距离
+        # c = 1 / (math.sqrt(2 * math.pi * np.linalg.det(sigma)))  # 正态分布exp前面的系数
+        c = 1  # 系数就不算了，反正不影响采样
+        m1 = np.matmul(xx - np.array([deviation, deviation, deviation]), np.linalg.inv(sigma))
+        m1 = np.matmul(m1, np.transpose(xx - np.array([deviation, deviation, deviation])))
+        m2 = np.matmul(xx + np.array([deviation, deviation, deviation]), np.linalg.inv(sigma))
+        m2 = np.matmul(m2, np.transpose(xx + np.array([deviation, deviation, deviation])))
+        res = 1 / 2 * (c * math.exp(-1 / 2 * m1) + 1 / 2 * c * math.exp(-1 / 4 * m2))  # 两个概率密度相加
+        return res
+
+    # 负粒子的分布函数
+    def TargetDis(xx):
+        sigma = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])  # 两个都是标准正态分布，只不过各自向两个方向移动了一定的距离
+        # c = 1 / (math.sqrt(2 * math.pi * np.linalg.det(sigma)))  # 正态分布exp前面的系数
+        c = 1  # 系数就不算了，反正不影响采样
+        m1 = np.matmul(xx - np.array([deviation, deviation, deviation]), np.linalg.inv(sigma))
+        m1 = np.matmul(m1, np.transpose(xx - np.array([deviation, deviation, deviation])))
+        m2 = np.matmul(xx + np.array([deviation, deviation, deviation]), np.linalg.inv(sigma))
+        m2 = np.matmul(m2, np.transpose(xx + np.array([deviation, deviation, deviation])))
+        res = 1 / 2 * (c * math.exp(-1 / 2 * m1) + 1 / 2 * c * math.exp(-1 / 4 * m2))  # 两个概率密度相加
+        return res
+
+    # 初始化
+    interpolationCount = 0
+    # nSample = int(sampleCount / 10)  # 需要采样的样本数量
+    nSample = sampleCount
+    y = np.zeros((nSample, 3))
+    # y0 = np.array([12, 5, 5])
+    y0 = x[random.randint(0, x.shape[0]) - 1, :]  # 在x中随机选择一个点作为初始点
+    y[0, :] = y0
+    alpha = 0
+    currentP = TargetDis(y0)
+    t = 0
+    rPoint = 0  # 重复点数
+    vPoint = 0  # 有效点数
+    ySize = 0  # 不重复的y点的个数
+    vPoint = vPoint + 1
+    t = t + 1
+    t1 = time.perf_counter()
+    with tqdm.tqdm(total=nSample) as pbar:
+        pbar.set_description('采样进度')
+        pbar.update(1)
+
+        while vPoint < nSample:
+            # point = np.random.rand(1, 3) * 20 - 10  # 在一定范围内均匀采样
+            point = x[random.randint(0, x.shape[0]) - 1, :]  # 有可能取到相同的点
+            # point = np.random.randn(1, 3) + x[t - 1, :]  # 以上一个点为中心的标准正态分布采样下一个点
+            p = TargetDis(point)
+            interpolationCount = interpolationCount + 1
+            alpha = min(1., p / currentP * TargetDis_Ori(point) / TargetDis_Ori(currentP))  # MH算法
+            u = random.random()
+            if u < alpha:
+                isContain = np.any(y == point)  # 判断是否已经包含了这个点
+                '''
+                这种排除y中重复点的做法，会让y中元素的数量很难到达nSample，
+                因为最后少数不在y中的点满足不了MH算法，导致收敛很慢。
+                '''
+                if not isContain:
+                    y[t, :] = point
+                    currentP = p
+                    vPoint = vPoint + 1
+                    t = t + 1
+                else:
+                    rPoint = rPoint + 1
+            else:
+                # x[t, :] = x[t - 1, :]
+                rPoint = rPoint + 1
+
+            pbar.update(1)
+
+    t2 = time.perf_counter()
+    figNeg = plt.figure()
+    axNeg = figNeg.add_subplot(projection='3d')
+    # fig, ax = plt.subplots(projection='3d')
+    # line, = plt.plot(x[0, 0], x[0, 1], 'o', linewidth=1, markersize=1)
+    lineNeg, = plt.plot(y[:, 0], y[:, 1], y[:, 2], 'or', linewidth=1, markersize=0.1)
+    figNeg.suptitle("负粒子算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
+    axNeg.set_xlabel('X')
+    axNeg.set_ylabel('Y')
+    axNeg.set_zlabel('Z')
+    axNeg.set_xlim(-10, 10)
+    axNeg.set_ylim(-10, 10)
+    axNeg.set_zlim(-10, 10)
+
+    # 在原样本中删除样本
+    x = x[x[:, 0].argsort()]  # 按第一列进行排序
+    y = y[y[:, 0].argsort()]
+
+    assert np.equal(x, y).all(), 'x和y不相等'
 
 
 if __name__ == '__main__':
@@ -234,7 +336,8 @@ if __name__ == '__main__':
     sampleCount = 20000
     deviation = 3
     interpolationCount = 0  # 重构次数的计数
-    HMC()
-    MH()
+    # HMC()
+    # MH()
+    NegParticles()
 
     plt.show()
