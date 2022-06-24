@@ -260,8 +260,8 @@ def NegParticles():
 
     # 初始化
     interpolationCount = 0
-    # nSample = int(sampleCount / 10)  # 需要采样的样本数量
-    nSample = sampleCount
+    nSample = int(sampleCount / 1.01)  # 需要采样的样本数量
+    # nSample = sampleCount
     y = np.zeros((nSample, 3))
     # y0 = np.array([12, 5, 5])
     y0 = x[random.randint(0, x.shape[0]) - 1, :]  # 在x中随机选择一个点作为初始点
@@ -290,7 +290,7 @@ def NegParticles():
             if u < alpha:
                 isContain = np.any(y == point)  # 判断是否已经包含了这个点
                 '''
-                这种排除y中重复点的做法，会让y中元素的数量很难到达nSample，
+                这种排除y中重复点的做法，当需要删除的点数特别接近原点数时，会让y中元素的数量很难到达nSample，
                 因为最后少数不在y中的点满足不了MH算法，导致收敛很慢。
                 '''
                 if not isContain:
@@ -321,10 +321,10 @@ def NegParticles():
     axNeg.set_zlim(-10, 10)
 
     # 在原样本中删除样本
-    x = x[x[:, 0].argsort()]  # 按第一列进行排序
-    y = y[y[:, 0].argsort()]
-
-    assert np.equal(x, y).all(), 'x和y不相等'
+    # x = x[x[:, 0].argsort()]  # 按第一列进行排序
+    # y = y[y[:, 0].argsort()]
+    #
+    # assert np.equal(x, y).all(), 'x和y不相等'
 
 
 if __name__ == '__main__':
