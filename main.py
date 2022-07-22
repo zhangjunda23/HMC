@@ -1,343 +1,220 @@
 import math
-import random
-
-import numpy
-import tqdm
-from matplotlib.animation import FuncAnimation
 import matplotlib.pyplot as plt
 import numpy as np
+from numba import cuda
 from scipy.misc import derivative
-import time
+from time import perf_counter
+from numba.cuda.random import create_xoroshiro128p_states, xoroshiro128p_uniform_float32, xoroshiro128p_normal_float32
+
+
+@cuda.jit(device=True)
+# 目标分布pdf，不归一化
+def TargetPDF(xin, yin, zin):
+    res = math.exp(-1 / 2 * ((xin - 3) ** 2 + (yin - 3) ** 2 + (zin - 3) ** 2)) + 1 / 2 * math.exp(
+        -1 / 4 * ((xin + 3) ** 2 + (yin + 3) ** 2 + (zin + 3) ** 2))
+    return res
+
+
+# 能量
+@cuda.jit(device=True)
+def TargetPDFU(xin, yin, zin):
+    return -math.log(TargetPDF(xin, yin, zin))
+
+
+# 计算偏导，固定其他维度，在要求点的左右各0.0001范围内近似求取
+@cuda.jit(device=True)
+def partial_derivative(var: int, point: np.ndarray):
+    left = point[var] - 0.0001
+    right = point[var] + 0.0001
+    if var == 0:
+        return (TargetPDFU(right, point[1], point[2]) - TargetPDFU(left, point[1], point[2])) / 0.0002
+    elif var == 1:
+        return (TargetPDFU(point[0], right, point[2]) - TargetPDFU(point[0], left, point[2])) / 0.0002
+    else:
+        return (TargetPDFU(point[0], point[1], right) - TargetPDFU(point[0], point[1], left)) / 0.0002
+
+
+# U、dU、K、dK需要准确计算，不能随意舍掉前面的系数，梯度的减小等价于leap frog方法里步长的减小
+# 势能，常数被忽略
+@cuda.jit(device=True)
+def U(xx: np.ndarray):
+    # global interpolationCount
+    # xx = xx.reshape((1, 3))
+    res = TargetPDFU(xx[0], xx[1], xx[2])
+    # res_interpolationCount = res_interpolationCount + 1
+    return res
+
+
+# 势能的导数
+@cuda.jit(device=True)
+def dU(xx: np.ndarray, res: np.ndarray):
+    # global interpolationCount
+    # res_interpolationCount = res_interpolationCount + 1
+
+    res[0] = partial_derivative(0, xx)
+    res[1] = partial_derivative(1, xx)
+    res[2] = partial_derivative(2, xx)
+
+
+# 动能
+@cuda.jit(device=True)
+def K(p: np.ndarray):
+    return p[0] ** 2 + p[1] ** 2 + p[2] ** 2
+
+
+# 动能的导数
+@cuda.jit(device=True)
+def dK(p: np.ndarray, res: np.ndarray):
+    res[0] = 2 * p[0]
+    res[1] = 2 * p[1]
+    res[2] = 2 * p[2]
 
 
 # 用HMC采样
-def HMC():
-    global interpolationCount, sampleCount, deviation
+@cuda.jit
+def HMC_CUDA(n,
+             in_initPoint,
+             in_p0,
+             pStar,
+             xStar,
+             res_dUArray,
+             res_dKArray,
+             res_x,
+             res_validCount,
+             in_rng):
+    threadID = cuda.grid(1)  # 获取线程的绝对id
+    thread_Sum = cuda.gridsize(1)  # 线程总数
+    # print(thread_Sum)
 
-    # 用scipy求偏导，参数为（目标函数，求偏导得维度，求偏导的点）
-    def partial_derivative(func, var=0, point=[]):
-        args = point[:]
-
-        def wraps(xx):
-            args[var] = xx
-            return func(*args)
-
-        return derivative(wraps, point[var], dx=1e-6)
-
-    # 目标分布pdf，不归一化
-    def TargetPDF(xin, yin, zin):
-        res = 0
-        res = math.exp(-1 / 2 * ((xin - deviation) ** 2 + (yin - deviation) ** 2 + (zin - deviation) ** 2)) + \
-              1 / 2 * math.exp(-1 / 4 * ((xin + deviation) ** 2 + (yin + deviation) ** 2 + (zin + deviation) ** 2))
-
-        return res
-
-    # 能量
-    def TargetPDFU(xin, yin, zin):
-        return -math.log(TargetPDF(xin, yin, zin))
-
-    # U、dU、K、dK需要准确计算，不能随意舍掉前面的系数，梯度的减小等价于leap frog方法里步长的减小
-    # 势能，常数被忽略
-    def U(xx: np.ndarray):
-        global interpolationCount
-        xx = xx.reshape((1, 3))
-        res = TargetPDFU(xx[0, 0], xx[0, 1], xx[0, 2])
-        interpolationCount = interpolationCount + 1
-        return res
-
-    # 势能的导数
-    def dU(xx: np.ndarray):
-        global interpolationCount
-        xx = xx.reshape((1, 3))
-        interpolationCount = interpolationCount + 1
-        res = np.array(
-            [partial_derivative(TargetPDFU, 0, xx.tolist()[0]),
-             partial_derivative(TargetPDFU, 1, xx.tolist()[0]),
-             partial_derivative(TargetPDFU, 2, xx.tolist()[0])])
-        return res
-
-    # 动能
-    def K(p: np.ndarray):
-        res = np.matmul(p, np.transpose(p))
-        return res
-
-    # 动能的导数
-    def dK(p: np.ndarray):
-        res = 2 * p
-        return res
+    # print(cuda.grid(1))
 
     delta = 0.1  # leap frog的步长
-    nSample = sampleCount  # 需要采样的样本数量
     L = 20  # leap frog的步数
 
     # 初始化
-    x = np.zeros((nSample, 3))
-    x0 = np.array([12, 5, 5])
-
-    x[0, :] = x0
+    x0 = in_initPoint[threadID]  # 获取和线程对应的那个初始位置
+    # res_x[0, :] = x0
+    res_x[n * threadID, 0] = x0[0]
+    res_x[n * threadID, 1] = x0[1]
+    res_x[n * threadID, 2] = x0[2]
     t = 0
-    vPoint = 0
-    rPoint = 0
-    vPoint = vPoint + 1
-
+    # res_validCount = res_validCount + 1
     t = t + 1
-    t1 = time.perf_counter()
-    with tqdm.tqdm(total=nSample) as pbar:
-        pbar.set_description('采样进度')
-        pbar.update(1)
-        while vPoint < nSample:
-            p0 = np.random.randn(1, 3)
-            # leap frog方法
-            pStar = p0 - delta / 2 * dU(x[t - 1, :])  # 动量移动半步
-            xStar = x[t - 1, :] + delta * dK(pStar)  # 位置移动一步
-            for jL in range(1, L - 1):
-                pStar = pStar - delta * dU(xStar)
-                xStar = xStar + delta * dK(pStar)
-            pStar = pStar - delta / 2 * dU(xStar)  # 动量移动半步
 
-            U0 = U(x[t - 1, :])
-            UStar = U(xStar)
+    while res_validCount < n:
+        p0 = in_p0
+        p0[0] = xoroshiro128p_normal_float32(in_rng, threadID)
+        p0[1] = xoroshiro128p_normal_float32(in_rng, threadID)
+        p0[2] = xoroshiro128p_normal_float32(in_rng, threadID)
 
-            K0 = K(p0)
-            KStar = K(pStar)[0, 0]
+        # leap frog方法
+        # 动量移动半步
+        dU(res_x[n * threadID + t - 1, :], res_dUArray)  # 计算动量，结果保存在res_dUArray
+        pStar[0] = p0[0] - delta / 2 * res_dUArray[0]
+        pStar[1] = p0[1] - delta / 2 * res_dUArray[1]
+        pStar[2] = p0[2] - delta / 2 * res_dUArray[2]
 
-            # 计算是否接受这个样本
-            alpha = min(1., math.exp((U0 + K0) - (UStar + KStar)))
-            u = random.random()
-            if u < alpha:
-                x[t, :] = xStar
-                vPoint = vPoint + 1
-                t = t + 1
-            else:
-                # x[t, :] = x[t - 1, :]
-                rPoint = rPoint + 1
-                pass
-            pbar.update(1)
-    t2 = time.perf_counter()
-    # 画图
-    fig = plt.figure()
-    ax = fig.add_subplot(projection='3d')
-    # fig, ax = plt.subplots()
-    line, = plt.plot(x[:, 0], x[:, 1], x[:, 2], 'o', linewidth=0.5, markersize=0.1)
-    fig.suptitle("HMC算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.set_xlim(-10, 10)
-    ax.set_ylim(-10, 10)
-    ax.set_zlim(-10, 10)
+        # 位置移动一步
+        dK(pStar, res_dKArray)
+        xStar[0] = delta * res_dKArray[0] + res_x[n * threadID + t - 1, 0]
+        xStar[1] = delta * res_dKArray[1] + res_x[n * threadID + t - 1, 1]
+        xStar[2] = delta * res_dKArray[2] + res_x[n * threadID + t - 1, 2]
 
-    # def update(i):
-    #     global repeatCount
-    #     global validCount
-    #     line.set_xdata(x[0:i, 0])
-    #     line.set_ydata(x[0:i, 1])
-    #     if i > 0:
-    #         if (x[i, :] == x[i - 1, :]).all():
-    #             repeatCount = repeatCount + 1
-    #         else:
-    #             validCount = validCount + 1
-    #     fig.suptitle("%d个有效点，%d个重复点" % (validCount, repeatCount))
-    #     return line, fig
-    #
-    # ani = FuncAnimation(fig, update, interval=100)
-    #
-    # plt.show()
-    # plt.pause(0)
+        for jL in range(1, L - 1):
+            dU(xStar, res_dUArray)
+            pStar[0] = pStar[0] - delta * res_dUArray[0]
+            pStar[1] = pStar[1] - delta * res_dUArray[1]
+            pStar[2] = pStar[2] - delta * res_dUArray[2]
+            dK(pStar, res_dKArray)
+            xStar[0] = xStar[0] + delta * res_dKArray[0]
+            xStar[1] = xStar[1] + delta * res_dKArray[1]
+            xStar[2] = xStar[2] + delta * res_dKArray[2]
 
+        dU(xStar, res_dUArray)
+        pStar[0] = pStar[0] - delta / 2 * res_dUArray[0]
+        pStar[1] = pStar[1] - delta / 2 * res_dUArray[1]
+        pStar[2] = pStar[2] - delta / 2 * res_dUArray[2]
+        # pStar = pStar - delta / 2 * dU(xStar, res_dUArray)  # 动量移动半步
 
-# 用metropolis采样方法
-def MH():
-    # 三维正态分布求点xx处的概率
-    global interpolationCount, sampleCount, deviation
+        U0 = U(res_x[n * threadID + t - 1, :])
+        UStar = U(xStar)
 
-    def TargetDis(xx):
-        sigma = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])  # 两个都是标准正态分布，只不过各自向两个方向移动了一定的距离
-        # c = 1 / (math.sqrt(2 * math.pi * np.linalg.det(sigma)))  # 正态分布exp前面的系数
-        c = 1  # 系数就不算了，反正不影响采样
-        m1 = np.matmul(xx - np.array([deviation, deviation, deviation]), np.linalg.inv(sigma))
-        m1 = np.matmul(m1, np.transpose(xx - np.array([deviation, deviation, deviation])))
-        m2 = np.matmul(xx + np.array([deviation, deviation, deviation]), np.linalg.inv(sigma))
-        m2 = np.matmul(m2, np.transpose(xx + np.array([deviation, deviation, deviation])))
-        res = 1 / 2 * (c * math.exp(-1 / 2 * m1) + 1 / 2 * c * math.exp(-1 / 4 * m2))  # 两个概率密度相加
-        return res
+        K0 = K(p0)
+        KStar = K(pStar)
 
-    # 初始化
-    interpolationCount = 0
-    nSample = sampleCount  # 需要采样的样本数量
-    x = np.zeros((nSample, 3))
-    x0 = np.array([12, 5, 5])
-    x[0, :] = x0
-    alpha = 0
-    currentP = TargetDis(x0)
-    t = 0
-    rPoint = 0  # 重复点数
-    vPoint = 0  # 有效点数
-    vPoint = vPoint + 1
-    t = t + 1
-    t1 = time.perf_counter()
-    with tqdm.tqdm(total=nSample) as pbar:
-        pbar.set_description('采样进度')
-        pbar.update(1)
-        while vPoint < nSample:
-            point = np.random.rand(1, 3) * 20 - 10  # 在一定范围内均匀采样
-            # point = np.random.randn(1, 3) + x[t - 1, :]  # 以上一个点为中心的标准正态分布采样下一个点
-            p = TargetDis(point)
-            interpolationCount = interpolationCount + 1
-            alpha = min(1., p / currentP)
-            u = random.random()
-            if u < alpha:
-                x[t, :] = point
-                currentP = p
-                vPoint = vPoint + 1
-                t = t + 1
-            else:
-                # x[t, :] = x[t - 1, :]
-                rPoint = rPoint + 1
-                pass
-            pbar.update(1)
+        # print(threadID, 'OK')
+        # 计算是否接受这个样本
+        alpha = min(1., math.exp((U0 + K0) - (UStar + KStar)))
+        # u = random.random()
+        u = xoroshiro128p_uniform_float32(in_rng, threadID)
+        if u < alpha:
+            # res_x[t, :] = xStar
+            res_x[n * threadID + t, 0] = xStar[0]
+            res_x[n * threadID + t, 1] = xStar[1]
+            res_x[n * threadID + t, 2] = xStar[2]
+            res_validCount = res_validCount + 1
+            t = t + 1
 
-    t2 = time.perf_counter()
-    figMH = plt.figure()
-    axMH = figMH.add_subplot(projection='3d')
-    # fig, ax = plt.subplots(projection='3d')
-    # line, = plt.plot(x[0, 0], x[0, 1], 'o', linewidth=1, markersize=1)
-    lineMH, = plt.plot(x[:, 0], x[:, 1], x[:, 2], 'o', linewidth=1, markersize=0.1)
-    figMH.suptitle("MH算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
-    axMH.set_xlabel('X')
-    axMH.set_ylabel('Y')
-    axMH.set_zlabel('Z')
-    axMH.set_xlim(-10, 10)
-    axMH.set_ylim(-10, 10)
-    axMH.set_zlim(-10, 10)
+        else:
+            # x[t, :] = x[t - 1, :]
+            # res_repeatCount = res_repeatCount + 1
+            pass
 
-    # def update(i):
-    #     global repeatCount
-    #     global validCount
-    #     lineMH.set_xdata(x[0:i, 0])
-    #     lineMH.set_ydata(x[0:i, 1])
-    #     if i > 0:
-    #         if (x[i, :] == x[i - 1, :]).all():
-    #             repeatCount = repeatCount + 1
-    #         else:
-    #             validCount = validCount + 1
-    #     figMH.suptitle("%d个有效点，%d个重复点" % (validCount, repeatCount))
-    #     return lineMH, figMH
-    #
-    # ani = FuncAnimation(figMH, update, interval=0.01)
-
-    return x
-
-
-# 生成负粒子
-def NegParticles():
-    x = MH()  # 获得用MH方法生成的粒子
-    global interpolationCount, sampleCount, deviation
-
-    # 原分布
-    def TargetDis_Ori(xx):
-        sigma = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])  # 两个都是标准正态分布，只不过各自向两个方向移动了一定的距离
-        # c = 1 / (math.sqrt(2 * math.pi * np.linalg.det(sigma)))  # 正态分布exp前面的系数
-        c = 1  # 系数就不算了，反正不影响采样
-        m1 = np.matmul(xx - np.array([deviation, deviation, deviation]), np.linalg.inv(sigma))
-        m1 = np.matmul(m1, np.transpose(xx - np.array([deviation, deviation, deviation])))
-        m2 = np.matmul(xx + np.array([deviation, deviation, deviation]), np.linalg.inv(sigma))
-        m2 = np.matmul(m2, np.transpose(xx + np.array([deviation, deviation, deviation])))
-        res = 1 / 2 * (c * math.exp(-1 / 2 * m1) + 1 / 2 * c * math.exp(-1 / 4 * m2))  # 两个概率密度相加
-        return res
-
-    # 负粒子的分布函数
-    def TargetDis(xx):
-        sigma = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])  # 两个都是标准正态分布，只不过各自向两个方向移动了一定的距离
-        # c = 1 / (math.sqrt(2 * math.pi * np.linalg.det(sigma)))  # 正态分布exp前面的系数
-        c = 1  # 系数就不算了，反正不影响采样
-        m1 = np.matmul(xx - np.array([deviation, deviation, deviation]), np.linalg.inv(sigma))
-        m1 = np.matmul(m1, np.transpose(xx - np.array([deviation, deviation, deviation])))
-        m2 = np.matmul(xx + np.array([deviation, deviation, deviation]), np.linalg.inv(sigma))
-        m2 = np.matmul(m2, np.transpose(xx + np.array([deviation, deviation, deviation])))
-        res = 1 / 2 * (c * math.exp(-1 / 2 * m1) + 1 / 2 * c * math.exp(-1 / 4 * m2))  # 两个概率密度相加
-        return res
-
-    # 初始化
-    interpolationCount = 0
-    nSample = int(sampleCount / 1.01)  # 需要采样的样本数量
-    # nSample = sampleCount
-    y = np.zeros((nSample, 3))
-    # y0 = np.array([12, 5, 5])
-    y0 = x[random.randint(0, x.shape[0]) - 1, :]  # 在x中随机选择一个点作为初始点
-    y[0, :] = y0
-    alpha = 0
-    currentP = TargetDis(y0)
-    t = 0
-    rPoint = 0  # 重复点数
-    vPoint = 0  # 有效点数
-    ySize = 0  # 不重复的y点的个数
-    vPoint = vPoint + 1
-    t = t + 1
-    t1 = time.perf_counter()
-    with tqdm.tqdm(total=nSample) as pbar:
-        pbar.set_description('采样进度')
-        pbar.update(1)
-
-        while vPoint < nSample:
-            # point = np.random.rand(1, 3) * 20 - 10  # 在一定范围内均匀采样
-            point = x[random.randint(0, x.shape[0]) - 1, :]  # 有可能取到相同的点
-            # point = np.random.randn(1, 3) + x[t - 1, :]  # 以上一个点为中心的标准正态分布采样下一个点
-            p = TargetDis(point)
-            interpolationCount = interpolationCount + 1
-            alpha = min(1., p / currentP * TargetDis_Ori(point) / TargetDis_Ori(currentP))  # MH算法
-            u = random.random()
-            if u < alpha:
-                isContain = np.any(y == point)  # 判断是否已经包含了这个点
-                '''
-                这种排除y中重复点的做法，当需要删除的点数特别接近原点数时，会让y中元素的数量很难到达nSample，
-                因为最后少数不在y中的点满足不了MH算法，导致收敛很慢。
-                '''
-                if not isContain:
-                    y[t, :] = point
-                    currentP = p
-                    vPoint = vPoint + 1
-                    t = t + 1
-                else:
-                    rPoint = rPoint + 1
-            else:
-                # x[t, :] = x[t - 1, :]
-                rPoint = rPoint + 1
-
-            pbar.update(1)
-
-    t2 = time.perf_counter()
-    figNeg = plt.figure()
-    axNeg = figNeg.add_subplot(projection='3d')
-    # fig, ax = plt.subplots(projection='3d')
-    # line, = plt.plot(x[0, 0], x[0, 1], 'o', linewidth=1, markersize=1)
-    lineNeg, = plt.plot(y[:, 0], y[:, 1], y[:, 2], 'or', linewidth=1, markersize=0.1)
-    figNeg.suptitle("负粒子算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
-    axNeg.set_xlabel('X')
-    axNeg.set_ylabel('Y')
-    axNeg.set_zlabel('Z')
-    axNeg.set_xlim(-10, 10)
-    axNeg.set_ylim(-10, 10)
-    axNeg.set_zlim(-10, 10)
-
-    # 在原样本中删除样本
-    # x = x[x[:, 0].argsort()]  # 按第一列进行排序
-    # y = y[y[:, 0].argsort()]
-    #
-    # assert np.equal(x, y).all(), 'x和y不相等'
+    # # res_interpolationCount = interpolationCount
+    # print(res_interpolationCount, res_validCount, res_repeatCount)
 
 
 if __name__ == '__main__':
     plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
     plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
     np.random.seed(123)
-    repeatCount = 0
-    validCount = 0
-    sampleCount = 20000
-    deviation = 3
-    interpolationCount = 0  # 重构次数的计数
-    # HMC()
-    # MH()
-    NegParticles()
+    # repeatCount = 0  # 重复点的个数
+    validCount = 0  # 有效点的个数
+    sampleCount = 10000  # 每个线程采样的点数
+    deviation = 3  # 三维正态分布均值偏离量
+    # interpolationCount = 0  # 重构次数的计数
+    initpStar = np.zeros((3,))
+    initxStar = np.zeros((3,))
+    initP0 = np.zeros(3, )  # 动量初始位置
+    dUArray = np.zeros((3,))
+    dKArray = np.zeros((3,))
+    threads_per_block = 32  # 每个block包含的线程数
+    blocks_per_Grid = 32  # grid包含的block个数
+    threadSum = threads_per_block * blocks_per_Grid  # 线程总数
+    # 以下参数需要针对每个线程
+    # initPoint = np.array([12, 5, 5])  # 初始的采样位置
+    initPoint = np.random.randint(20, size=(threadSum, 3)) - 10
+    # x = np.zeros((sampleCount, 3))  # 保存结果的数组
+    x = np.zeros((sampleCount * threadSum, 3))  # 保存结果的数组
+    rng_states = create_xoroshiro128p_states(threads_per_block * blocks_per_Grid, seed=1)  # GPU生成随机数需要的states
+    print('Thread Sum:', threadSum)
+    print('Point Sum:', sampleCount * threadSum)
+    t1 = perf_counter()
+    HMC_CUDA[blocks_per_Grid, threads_per_block](sampleCount,
+                                                 initPoint,
+                                                 initP0,
+                                                 initpStar,
+                                                 initxStar,
+                                                 dUArray,
+                                                 dKArray,
+                                                 x,
+                                                 validCount,
+                                                 rng_states)
 
+    cuda.synchronize()
+    t2 = perf_counter()
+    t_consume = t2 - t1
+    print('耗时%.3f秒' % t_consume)
+    # 画图
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+    # fig, ax = plt.subplots()
+    line, = plt.plot(x[:, 0], x[:, 1], x[:, 2], 'o', linewidth=0.5, markersize=0.1)
+    # fig.suptitle("HMC算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_xlim(-10, 10)
+    ax.set_ylim(-10, 10)
+    ax.set_zlim(-10, 10)
     plt.show()
