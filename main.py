@@ -11,7 +11,7 @@ import time
 
 
 # 用HMC采样
-def HMC():
+def HMC(target_count: int):
     global interpolationCount, sampleCount, deviation
 
     # 用scipy求偏导，参数为（目标函数，求偏导得维度，求偏导的点）
@@ -67,7 +67,7 @@ def HMC():
         return res
 
     delta = 0.1  # leap frog的步长
-    nSample = sampleCount  # 需要采样的样本数量
+    nSample = target_count  # 需要采样的样本数量
     L = 20  # leap frog的步数
 
     # 初始化
@@ -120,6 +120,7 @@ def HMC():
     # fig, ax = plt.subplots()
     line, = plt.plot(x[:, 0], x[:, 1], x[:, 2], 'o', linewidth=0.5, markersize=0.1)
     fig.suptitle("HMC算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
+    print('hmc生成耗时：{}\nhmc每粒子耗时：{}'.format((t2 - t1), (t2 - t1) / vPoint))
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
@@ -147,7 +148,7 @@ def HMC():
 
 
 # 用metropolis采样方法
-def MH():
+def MH(target_count: int):
     # 三维正态分布求点xx处的概率
     global interpolationCount, sampleCount, deviation
 
@@ -164,7 +165,7 @@ def MH():
 
     # 初始化
     interpolationCount = 0
-    nSample = sampleCount  # 需要采样的样本数量
+    nSample = target_count  # 需要采样的样本数量
     x = np.zeros((nSample, 3))
     x0 = np.array([12, 5, 5])
     x[0, :] = x0
@@ -204,6 +205,7 @@ def MH():
     # line, = plt.plot(x[0, 0], x[0, 1], 'o', linewidth=1, markersize=1)
     lineMH, = plt.plot(x[:, 0], x[:, 1], x[:, 2], 'o', linewidth=1, markersize=0.1)
     figMH.suptitle("MH算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
+    print('mh生成耗时：{}\nmh每粒子耗时：{}'.format((t2 - t1), (t2 - t1) / vPoint))
     axMH.set_xlabel('X')
     axMH.set_ylabel('Y')
     axMH.set_zlabel('Z')
@@ -230,8 +232,8 @@ def MH():
 
 
 # 生成负粒子
-def NegParticles():
-    x = MH()  # 获得用MH方法生成的粒子
+def NegParticles(target_count: int, delete_count: int):
+    x = MH(target_count)  # 获得用MH方法生成的粒子
     global interpolationCount, sampleCount, deviation
 
     # 原分布
@@ -260,7 +262,7 @@ def NegParticles():
 
     # 初始化
     interpolationCount = 0
-    nSample = int(sampleCount / 1.01)  # 需要采样的样本数量
+    nSample = delete_count  # 需要减掉的样本数量
     # nSample = sampleCount
     y = np.zeros((nSample, 3))
     # y0 = np.array([12, 5, 5])
@@ -312,7 +314,9 @@ def NegParticles():
     # fig, ax = plt.subplots(projection='3d')
     # line, = plt.plot(x[0, 0], x[0, 1], 'o', linewidth=1, markersize=1)
     lineNeg, = plt.plot(y[:, 0], y[:, 1], y[:, 2], 'or', linewidth=1, markersize=0.1)
-    figNeg.suptitle("负粒子算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
+    figNeg.suptitle(
+        "负粒子算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
+    print('删除耗时{}\nnegative粒子每粒子耗时：{}'.format((t2 - t1), (t2 - t1) / vPoint))
     axNeg.set_xlabel('X')
     axNeg.set_ylabel('Y')
     axNeg.set_zlabel('Z')
@@ -326,6 +330,8 @@ def NegParticles():
     #
     # assert np.equal(x, y).all(), 'x和y不相等'
 
+    return t2 - t1  # 返回删除总耗时
+
 
 if __name__ == '__main__':
     plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
@@ -333,11 +339,22 @@ if __name__ == '__main__':
     np.random.seed(123)
     repeatCount = 0
     validCount = 0
-    sampleCount = 20000
+    sampleCount = 50000
     deviation = 3
     interpolationCount = 0  # 重构次数的计数
-    # HMC()
-    # MH()
-    NegParticles()
+    # HMC(sampleCount)
+    # MH(sampleCount)
+    delete_ratio = 0.7  # 删除粒子占原粒子数的比例
 
-    plt.show()
+    NegParticles(sampleCount, int(sampleCount * delete_ratio))  # 用删除粒子的方法
+    HMC(int(sampleCount - sampleCount * delete_ratio))  # 用直接生成的方法
+    MH(int(sampleCount - sampleCount * delete_ratio))  # 用直接生成的方法
+
+    # timeCosume = np.zeros((8, 2))
+    # for i in range(1, 6):
+    #     t = NegParticles(sampleCount, int(0.1 * i * sampleCount))  # 用删除粒子的方法
+    #     timeCosume[i, 0] = int(0.1 * i * sampleCount)
+    #     timeCosume[i, 1] = t
+    #
+    # plt.plot(timeCosume[:, 0], timeCosume[:, 1])
+    # plt.show()
