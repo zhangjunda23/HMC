@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.misc import derivative
 import time
+import matplotlib.ticker as ticker
 
 
 # 用HMC采样
@@ -115,18 +116,18 @@ def HMC(target_count: int):
             pbar.update(1)
     t2 = time.perf_counter()
     # 画图
-    fig = plt.figure()
-    ax = fig.add_subplot(projection='3d')
-    # fig, ax = plt.subplots()
-    line, = plt.plot(x[:, 0], x[:, 1], x[:, 2], 'o', linewidth=0.5, markersize=0.1)
-    fig.suptitle("HMC算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
-    print('hmc生成耗时：{}\nhmc每粒子耗时：{}'.format((t2 - t1), (t2 - t1) / vPoint))
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.set_xlim(-10, 10)
-    ax.set_ylim(-10, 10)
-    ax.set_zlim(-10, 10)
+    # fig = plt.figure()
+    # ax = fig.add_subplot(projection='3d')
+    # # fig, ax = plt.subplots()
+    # line, = plt.plot(x[:, 0], x[:, 1], x[:, 2], 'o', linewidth=0.5, markersize=0.1)
+    # fig.suptitle("HMC算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
+    # print('hmc生成耗时：{}\nhmc每粒子耗时：{}'.format((t2 - t1), (t2 - t1) / vPoint))
+    # ax.set_xlabel('X')
+    # ax.set_ylabel('Y')
+    # ax.set_zlabel('Z')
+    # ax.set_xlim(-10, 10)
+    # ax.set_ylim(-10, 10)
+    # ax.set_zlim(-10, 10)
 
     # def update(i):
     #     global repeatCount
@@ -145,6 +146,8 @@ def HMC(target_count: int):
     #
     # plt.show()
     # plt.pause(0)
+
+    return x, t2 - t1
 
 
 # 用metropolis采样方法
@@ -199,19 +202,19 @@ def MH(target_count: int):
             pbar.update(1)
 
     t2 = time.perf_counter()
-    figMH = plt.figure()
-    axMH = figMH.add_subplot(projection='3d')
-    # fig, ax = plt.subplots(projection='3d')
-    # line, = plt.plot(x[0, 0], x[0, 1], 'o', linewidth=1, markersize=1)
-    lineMH, = plt.plot(x[:, 0], x[:, 1], x[:, 2], 'o', linewidth=1, markersize=0.1)
-    figMH.suptitle("MH算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
+    # figMH = plt.figure()
+    # axMH = figMH.add_subplot(projection='3d')
+    # # fig, ax = plt.subplots(projection='3d')
+    # # line, = plt.plot(x[0, 0], x[0, 1], 'o', linewidth=1, markersize=1)
+    # lineMH, = plt.plot(x[:, 0], x[:, 1], x[:, 2], 'o', linewidth=1, markersize=0.1)
+    # figMH.suptitle("MH算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
     print('mh生成耗时：{}\nmh每粒子耗时：{}'.format((t2 - t1), (t2 - t1) / vPoint))
-    axMH.set_xlabel('X')
-    axMH.set_ylabel('Y')
-    axMH.set_zlabel('Z')
-    axMH.set_xlim(-10, 10)
-    axMH.set_ylim(-10, 10)
-    axMH.set_zlim(-10, 10)
+    # axMH.set_xlabel('X')
+    # axMH.set_ylabel('Y')
+    # axMH.set_zlabel('Z')
+    # axMH.set_xlim(-10, 10)
+    # axMH.set_ylim(-10, 10)
+    # axMH.set_zlim(-10, 10)
 
     # def update(i):
     #     global repeatCount
@@ -232,9 +235,10 @@ def MH(target_count: int):
 
 
 # 生成负粒子
-def NegParticles(target_count: int, delete_count: int):
-    x = MH(target_count)  # 获得用MH方法生成的粒子
+def NegParticles(x, delete_count: int):
+    # x = MH(target_count)  # 获得用MH方法生成的粒子
     global interpolationCount, sampleCount, deviation
+    x_in = x.copy()
 
     # 原分布
     def TargetDis_Ori(xx):
@@ -266,7 +270,7 @@ def NegParticles(target_count: int, delete_count: int):
     # nSample = sampleCount
     y = np.zeros((nSample, 3))
     # y0 = np.array([12, 5, 5])
-    y0 = x[random.randint(0, x.shape[0]) - 1, :]  # 在x中随机选择一个点作为初始点
+    y0 = x_in[random.randint(0, x_in.shape[0]) - 1, :]  # 在x中随机选择一个点作为初始点
     y[0, :] = y0
     alpha = 0
     currentP = TargetDis(y0)
@@ -283,25 +287,27 @@ def NegParticles(target_count: int, delete_count: int):
 
         while vPoint < nSample:
             # point = np.random.rand(1, 3) * 20 - 10  # 在一定范围内均匀采样
-            point = x[random.randint(0, x.shape[0]) - 1, :]  # 有可能取到相同的点
+            selectRow = random.randint(1, x_in.shape[0]) - 1
+            point = x_in[selectRow, :]  # 有可能取到相同的点
             # point = np.random.randn(1, 3) + x[t - 1, :]  # 以上一个点为中心的标准正态分布采样下一个点
             p = TargetDis(point)
             interpolationCount = interpolationCount + 1
             alpha = min(1., p / currentP * TargetDis_Ori(point) / TargetDis_Ori(currentP))  # MH算法
             u = random.random()
             if u < alpha:
-                isContain = np.any(y == point)  # 判断是否已经包含了这个点
+                # isContain = np.any(y == point)  # 判断是否已经包含了这个点
                 '''
                 这种排除y中重复点的做法，当需要删除的点数特别接近原点数时，会让y中元素的数量很难到达nSample，
                 因为最后少数不在y中的点满足不了MH算法，导致收敛很慢。
                 '''
-                if not isContain:
-                    y[t, :] = point
-                    currentP = p
-                    vPoint = vPoint + 1
-                    t = t + 1
-                else:
-                    rPoint = rPoint + 1
+                # if not isContain:
+                y[t, :] = point
+                x_in = np.delete(x_in, selectRow, axis=0)  # 在原点集中删除这个点
+                currentP = p
+                vPoint = vPoint + 1
+                t = t + 1
+                # else:
+                #     rPoint = rPoint + 1
             else:
                 # x[t, :] = x[t - 1, :]
                 rPoint = rPoint + 1
@@ -309,20 +315,20 @@ def NegParticles(target_count: int, delete_count: int):
             pbar.update(1)
 
     t2 = time.perf_counter()
-    figNeg = plt.figure()
-    axNeg = figNeg.add_subplot(projection='3d')
-    # fig, ax = plt.subplots(projection='3d')
-    # line, = plt.plot(x[0, 0], x[0, 1], 'o', linewidth=1, markersize=1)
-    lineNeg, = plt.plot(y[:, 0], y[:, 1], y[:, 2], 'or', linewidth=1, markersize=0.1)
-    figNeg.suptitle(
-        "负粒子算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
-    print('删除耗时{}\nnegative粒子每粒子耗时：{}'.format((t2 - t1), (t2 - t1) / vPoint))
-    axNeg.set_xlabel('X')
-    axNeg.set_ylabel('Y')
-    axNeg.set_zlabel('Z')
-    axNeg.set_xlim(-10, 10)
-    axNeg.set_ylim(-10, 10)
-    axNeg.set_zlim(-10, 10)
+    # figNeg = plt.figure()
+    # axNeg = figNeg.add_subplot(projection='3d')
+    # # fig, ax = plt.subplots(projection='3d')
+    # # line, = plt.plot(x[0, 0], x[0, 1], 'o', linewidth=1, markersize=1)
+    # lineNeg, = plt.plot(y[:, 0], y[:, 1], y[:, 2], 'or', linewidth=1, markersize=0.1)
+    # figNeg.suptitle(
+    #     "负粒子算法 %d个有效点，%d个重复点 耗时%.3f秒 %d次重构" % (vPoint, rPoint, t2 - t1, interpolationCount))
+    # print('删除耗时{}\nnegative粒子每粒子耗时：{}'.format((t2 - t1), (t2 - t1) / vPoint))
+    # axNeg.set_xlabel('X')
+    # axNeg.set_ylabel('Y')
+    # axNeg.set_zlabel('Z')
+    # axNeg.set_xlim(-10, 10)
+    # axNeg.set_ylim(-10, 10)
+    # axNeg.set_zlim(-10, 10)
 
     # 在原样本中删除样本
     # x = x[x[:, 0].argsort()]  # 按第一列进行排序
@@ -339,22 +345,116 @@ if __name__ == '__main__':
     np.random.seed(123)
     repeatCount = 0
     validCount = 0
-    sampleCount = 50000
+    sampleCount = 10000
     deviation = 3
     interpolationCount = 0  # 重构次数的计数
     # HMC(sampleCount)
     # MH(sampleCount)
     delete_ratio = 0.7  # 删除粒子占原粒子数的比例
 
-    NegParticles(sampleCount, int(sampleCount * delete_ratio))  # 用删除粒子的方法
-    HMC(int(sampleCount - sampleCount * delete_ratio))  # 用直接生成的方法
-    MH(int(sampleCount - sampleCount * delete_ratio))  # 用直接生成的方法
+    # NegParticles(sampleCount, int(sampleCount * delete_ratio))  # 用删除粒子的方法
+    # HMC(int(sampleCount - sampleCount * delete_ratio))  # 用直接生成的方法
+    # MH(int(sampleCount - sampleCount * delete_ratio))  # 用直接生成的方法
 
-    # timeCosume = np.zeros((8, 2))
-    # for i in range(1, 6):
-    #     t = NegParticles(sampleCount, int(0.1 * i * sampleCount))  # 用删除粒子的方法
-    #     timeCosume[i, 0] = int(0.1 * i * sampleCount)
-    #     timeCosume[i, 1] = t
-    #
-    # plt.plot(timeCosume[:, 0], timeCosume[:, 1])
-    # plt.show()
+    # x,_ = HMC(sampleCount)  # 用直接生成的方法
+    # np.save(str(sampleCount), x)
+
+    x = np.load(str(sampleCount) + '.npy')
+    num = 8  # 把粒子数分成num份
+    repeat = 3
+    delTime = np.zeros((num * repeat, 2))  # 删除的结果
+    genTime = np.zeros((num * repeat, 2))  # 生成的结果
+    for i in range(num):
+        # t_average = 0
+        for u in range(repeat):
+            # 删除
+            print('删除{}%的粒子'.format(1 / num * i * 100))
+            if i != 0:  # 排除删除0个粒子
+                t = NegParticles(x, int(1 / num * i * sampleCount))  # 用删除粒子的方法
+                delTime[i * repeat + u, 0] = int(1 / num * i * sampleCount) / sampleCount * 100
+                delTime[i * repeat + u, 1] = t
+
+            _, t_gen = HMC(int(sampleCount - 1 / num * i * sampleCount))
+            genTime[i * repeat + u, 0] = 100 - delTime[i * repeat + u, 0]
+            genTime[i * repeat + u, 1] = t_gen / 9 * 13
+
+    # 对最右侧的点右侧进行更细的分割
+    rightlimit = 1 / num * (num - 1)  # 对rightlimit到1之间的区域进行分割
+    rightParticleCount = sampleCount * rightlimit
+    num_more = 5
+    step_more = (1 - rightlimit) / num_more
+    delTime_more = np.zeros((num_more * repeat - repeat, 2))
+    genTime_more = np.zeros((num_more * repeat - repeat, 2))
+    for i in range(1, num_more):
+        # t_average = 0
+        for u in range(repeat):
+            # 删除
+            print('删除{}%的粒子'.format((step_more * i + rightlimit) * 100))
+            t = NegParticles(x, int((step_more * i + rightlimit) * sampleCount))  # 用删除粒子的方法
+            delTime_more[(i - 1) * repeat + u, 0] = (step_more * i + rightlimit) * 100
+            delTime_more[(i - 1) * repeat + u, 1] = t
+
+            _, t_gen = HMC(int(sampleCount - (step_more * i + rightlimit) * sampleCount))
+            genTime_more[(i - 1) * repeat + u, 0] = 100 - delTime_more[(i - 1) * repeat + u, 0]
+            genTime_more[(i - 1) * repeat + u, 1] = t_gen / 9 * 13
+
+    # 手动添加最接近100%的点
+    delTime99 = np.zeros((3, 2))
+    # genTime99 = np.zeros((1, 2))
+    for i in range(3):
+        t = NegParticles(x, int(0.99 * sampleCount))
+        delTime99[i, 0] = 0.99 * 100
+        delTime99[i, 1] = t
+
+    # _, t_gen = HMC(int(0.99 * sampleCount))
+    # genTime99[0, 0] = 100 - delTime99[0, 0]
+    # genTime99[0, 1] = t_gen
+
+    # 组合不同分割密度的结果
+    delTime_all = np.vstack((delTime, delTime_more, delTime99))
+    genTime_all = np.vstack((genTime, genTime_more))
+    # 多项式拟合
+    delete_fit = np.polyfit(delTime_all[:, 0], delTime_all[:, 1], 5)
+    generate_fit = np.polyfit(genTime_all[:, 0], genTime_all[:, 1], 3)
+    # fit_delete = np.polyval(np.polyfit(delTime_all[:, 0], delTime_all[:, 1], 5), delTime_all[:, 0])
+    # fit_generate = np.polyval(np.polyfit(genTime_all[:, 0], genTime_all[:, 1], 3), genTime_all[:, 0])
+    fit_delete = np.polyval(delete_fit, np.arange(1, 100, 1))
+    fit_generate = np.polyval(generate_fit, np.arange(1, 100, 1))
+
+    # 计算两条回归线的大概交点
+    move_step = 0.1
+    move_point = 85
+    gen_move = np.polyval(generate_fit, 100 - move_point)
+    del_move = np.polyval(delete_fit, move_point)
+    while gen_move > del_move:
+        move_point = move_point + move_step
+        gen_move = np.polyval(generate_fit, 100 - move_point)
+        del_move = np.polyval(delete_fit, move_point)
+    cross_point_y = np.polyval(delete_fit, move_point)
+    cross_point_x = move_point
+    print('两条回归线交于({},{})'.format(cross_point_x, cross_point_y))
+
+    fig, ax = plt.subplots()
+    ax2 = ax.twiny()
+    ax2.invert_xaxis()
+    dot1, = ax.plot(delTime_all[:, 0], delTime_all[:, 1], 'o', markersize=5, color='#f11616',
+                    label='Particle deleting')
+    ax.plot(np.arange(1, 100, 1), fit_delete, '-', linewidth=2, color='#f1161655')
+    dot2, = ax2.plot(genTime_all[:, 0], genTime_all[:, 1], 'o', markersize=5, color='#2d2c56',
+                     label='Particle generating')
+    ax2.plot(np.arange(1, 100, 1), fit_generate, '-', linewidth=2, color='#2d2c5655')
+    ax.plot([cross_point_x, cross_point_x], [cross_point_y, -1], '--', linewidth=1, color='#11111166')
+
+    ax.xaxis.set_major_locator(ticker.MultipleLocator(10))
+    ax2.xaxis.set_major_locator(ticker.MultipleLocator(10))
+    ax.set_xlabel('Percentage of particles to be deleted(%)')
+    ax2.set_xlabel('Percentage of particles to be generated(%)')
+    ax.set_ylabel('Time(ms)')
+    ax.legend(handles=[dot1, dot2])
+    # ax.set_xlim(60,100)
+    # ax2.set_xlim(40, 0)
+    ax.set_ylim(-1, 14)
+    ax2.set_ylim(-1, 14)
+
+    plt.savefig('del_gen_particles.png')
+    plt.show()
