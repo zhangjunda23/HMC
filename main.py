@@ -360,8 +360,8 @@ if __name__ == '__main__':
     # np.save(str(sampleCount), x)
 
     x = np.load(str(sampleCount) + '.npy')
-    num = 8  # 把粒子数分成num份
-    repeat = 3
+    num = 10  # 把粒子数分成num份
+    repeat = 1
     delTime = np.zeros((num * repeat, 2))  # 删除的结果
     genTime = np.zeros((num * repeat, 2))  # 生成的结果
     for i in range(num):
@@ -399,11 +399,11 @@ if __name__ == '__main__':
             genTime_more[(i - 1) * repeat + u, 1] = t_gen / 9 * 13
 
     # 手动添加最接近100%的点
-    delTime99 = np.zeros((3, 2))
+    delTime99 = np.zeros((1, 2))
     # genTime99 = np.zeros((1, 2))
-    for i in range(3):
-        t = NegParticles(x, int(0.99 * sampleCount))
-        delTime99[i, 0] = 0.99 * 100
+    for i in range(1):
+        t = NegParticles(x, int(0.995 * sampleCount))
+        delTime99[i, 0] = 0.995 * 100
         delTime99[i, 1] = t
 
     # _, t_gen = HMC(int(0.99 * sampleCount))
@@ -414,16 +414,16 @@ if __name__ == '__main__':
     delTime_all = np.vstack((delTime, delTime_more, delTime99))
     genTime_all = np.vstack((genTime, genTime_more))
     # 多项式拟合
-    delete_fit = np.polyfit(delTime_all[:, 0], delTime_all[:, 1], 5)
-    generate_fit = np.polyfit(genTime_all[:, 0], genTime_all[:, 1], 3)
+    delete_fit = np.polyfit(delTime_all[:, 0], delTime_all[:, 1], 8)
+    generate_fit = np.polyfit(genTime_all[:, 0], genTime_all[:, 1], 2)
     # fit_delete = np.polyval(np.polyfit(delTime_all[:, 0], delTime_all[:, 1], 5), delTime_all[:, 0])
     # fit_generate = np.polyval(np.polyfit(genTime_all[:, 0], genTime_all[:, 1], 3), genTime_all[:, 0])
-    fit_delete = np.polyval(delete_fit, np.arange(1, 100, 1))
-    fit_generate = np.polyval(generate_fit, np.arange(1, 100, 1))
+    fit_delete = np.polyval(delete_fit, np.arange(1, 100, .1))
+    fit_generate = np.polyval(generate_fit, np.arange(1, 100, .1))
 
     # 计算两条回归线的大概交点
-    move_step = 0.1
-    move_point = 85
+    move_step = 0.01
+    move_point = 90
     gen_move = np.polyval(generate_fit, 100 - move_point)
     del_move = np.polyval(delete_fit, move_point)
     while gen_move > del_move:
@@ -434,15 +434,16 @@ if __name__ == '__main__':
     cross_point_x = move_point
     print('两条回归线交于({},{})'.format(cross_point_x, cross_point_y))
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(5, 3.09))
     ax2 = ax.twiny()
     ax2.invert_xaxis()
     dot1, = ax.plot(delTime_all[:, 0], delTime_all[:, 1], 'o', markersize=5, color='#f11616',
                     label='Particle deleting')
-    ax.plot(np.arange(1, 100, 1), fit_delete, '-', linewidth=2, color='#f1161655')
+    ax.plot(np.arange(1, 100, 0.1), fit_delete, '-', linewidth=2, color='#f1161655')
+    # ax.plot(delTime_all[:, 0], delTime_all[:, 1], '-', linewidth=2, color='#f1161655')
     dot2, = ax2.plot(genTime_all[:, 0], genTime_all[:, 1], 'o', markersize=5, color='#2d2c56',
                      label='Particle generating')
-    ax2.plot(np.arange(1, 100, 1), fit_generate, '-', linewidth=2, color='#2d2c5655')
+    ax2.plot(np.arange(1, 100, 0.1), fit_generate, '-', linewidth=2, color='#2d2c5655')
     ax.plot([cross_point_x, cross_point_x], [cross_point_y, -1], '--', linewidth=1, color='#11111166')
 
     ax.xaxis.set_major_locator(ticker.MultipleLocator(10))
@@ -451,10 +452,10 @@ if __name__ == '__main__':
     ax2.set_xlabel('Percentage of particles to be generated(%)')
     ax.set_ylabel('Time(ms)')
     ax.legend(handles=[dot1, dot2])
-    # ax.set_xlim(60,100)
+    # ax.set_xlim(60, 100)
     # ax2.set_xlim(40, 0)
     ax.set_ylim(-1, 14)
     ax2.set_ylim(-1, 14)
 
-    plt.savefig('del_gen_particles.png')
+    fig.savefig('del_gen_particles.png', format='png', bbox_inches='tight', dpi=300)
     plt.show()
